@@ -9,7 +9,7 @@ import (
 
 const (
 	pluginName            = "xai-403-fixer"
-	pluginVersion         = "0.1.0"
+	pluginVersion         = "0.1.1"
 	managementRoutePrefix = "/plugins/" + pluginName
 )
 

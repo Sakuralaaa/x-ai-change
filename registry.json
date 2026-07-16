@@ -6,7 +6,7 @@
       "name": "xAI 403 Fixer",
       "description": "Scans, backs up, and repairs xAI OAuth auth files for the api.x.ai endpoint migration.",
       "author": "Sakuralaaa",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "repository": "https://github.com/Sakuralaaa/x-ai-change",
       "homepage": "https://github.com/Sakuralaaa/x-ai-change",
       "license": "MIT",
