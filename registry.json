@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "xai-403-fixer",
+      "name": "xAI 403 Fixer",
+      "description": "Scans, backs up, and repairs xAI OAuth auth files for the api.x.ai endpoint migration.",
+      "author": "Sakuralaaa",
+      "version": "0.1.0",
+      "repository": "https://github.com/Sakuralaaa/x-ai-change",
+      "homepage": "https://github.com/Sakuralaaa/x-ai-change",
+      "license": "MIT",
+      "tags": ["xai", "grok", "auth", "repair"],
+      "install": {
+        "type": "github-release"
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: xai-403-fixer-linux-amd64
+            goos: linux
+            goarch: amd64
+            output: xai-403-fixer.so
+          - os: ubuntu-24.04-arm
+            artifact: xai-403-fixer-linux-arm64
+            goos: linux
+            goarch: arm64
+            output: xai-403-fixer.so
+          - os: windows-latest
+            artifact: xai-403-fixer-windows-amd64
+            goos: windows
+            goarch: amd64
+            output: xai-403-fixer.dll
+          - os: macos-14
+            artifact: xai-403-fixer-darwin-arm64
+            goos: darwin
+            goarch: arm64
+            output: xai-403-fixer.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - name: Build
+        shell: bash
+        run: CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags='-s -w' -o '${{ matrix.output }}' .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.output }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Package CPA assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p release
+          zip -j "release/xai-403-fixer_${version}_linux_amd64.zip" artifacts/xai-403-fixer-linux-amd64/xai-403-fixer.so
+          zip -j "release/xai-403-fixer_${version}_linux_arm64.zip" artifacts/xai-403-fixer-linux-arm64/xai-403-fixer.so
+          zip -j "release/xai-403-fixer_${version}_windows_amd64.zip" artifacts/xai-403-fixer-windows-amd64/xai-403-fixer.dll
+          zip -j "release/xai-403-fixer_${version}_darwin_arm64.zip" artifacts/xai-403-fixer-darwin-arm64/xai-403-fixer.dylib
+          cd release
+          sha256sum *.zip > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
