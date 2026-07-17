@@ -9,7 +9,7 @@ import (
 
 const (
 	pluginName            = "xai-403-fixer"
-	pluginVersion         = "0.1.2"
+	pluginVersion         = "0.1.3"
 	managementRoutePrefix = "/plugins/" + pluginName
 )
 
@@ -30,6 +30,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 				{Method: http.MethodGet, Path: managementRoutePrefix + "/status", Description: "Get xAI 403 repair status."},
 				{Method: http.MethodPost, Path: managementRoutePrefix + "/scan", Description: "Scan xAI auth files for the July 16 API endpoint fix."},
 				{Method: http.MethodPost, Path: managementRoutePrefix + "/fix", Description: "Back up and repair selected xAI auth files."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/rollback", Description: "Restore the legacy Grok CLI endpoint and remove using_api."},
 			},
 			Resources: []resourceRoute{{Path: "/status", Menu: "xAI 403 修复", Description: "扫描并修复 xAI 认证文件的 API 地址与 using_api 字段。"}},
 		})
@@ -73,6 +74,17 @@ func dispatchManagement(req managementRequest) managementResponse {
 			}
 		}
 		if err := fixer.startFix(body); err != nil {
+			return jsonResponse(http.StatusConflict, map[string]any{"error": err.Error()})
+		}
+		return jsonResponse(http.StatusAccepted, map[string]any{"ok": true, "accepted": true})
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/rollback"):
+		var body fixRequest
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error()})
+			}
+		}
+		if err := fixer.startRollback(body); err != nil {
 			return jsonResponse(http.StatusConflict, map[string]any{"error": err.Error()})
 		}
 		return jsonResponse(http.StatusAccepted, map[string]any{"ok": true, "accepted": true})

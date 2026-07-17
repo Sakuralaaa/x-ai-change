@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,16 +13,16 @@ import (
 const targetBaseURL = "https://api.x.ai/v1"
 
 type authStatus struct {
-	AuthIndex     string `json:"auth_index"`
-	Name          string `json:"name"`
-	Email         string `json:"email,omitempty"`
-	Disabled      bool   `json:"disabled"`
-	BaseURL       string `json:"base_url,omitempty"`
-	UsingAPI      bool   `json:"using_api"`
-	HasUsingAPI   bool   `json:"has_using_api"`
-	NeedsFix      bool   `json:"needs_fix"`
-	LastOperation string `json:"last_operation,omitempty"`
-	Error         string `json:"error,omitempty"`
+	AuthIndex            string `json:"auth_index"`
+	Name                 string `json:"name"`
+	Email                string `json:"email,omitempty"`
+	Disabled             bool   `json:"disabled"`
+	BaseURL              string `json:"base_url,omitempty"`
+	UsingAPI             bool   `json:"using_api"`
+	HasUsingAPI          bool   `json:"has_using_api"`
+	NeedsFix             bool   `json:"needs_fix"`
+	LastOperation        string `json:"last_operation,omitempty"`
+	Error                string `json:"error,omitempty"`
 }
 
 type statusSnapshot struct {
@@ -32,7 +31,6 @@ type statusSnapshot struct {
 	Done       int          `json:"done"`
 	Total      int          `json:"total"`
 	ScannedAt  string       `json:"scanned_at,omitempty"`
-	BackupDir  string       `json:"backup_dir,omitempty"`
 	LastError  string       `json:"last_error,omitempty"`
 	TargetURL  string       `json:"target_url"`
 	Accounts   []authStatus `json:"accounts"`
@@ -49,7 +47,6 @@ type fixerEngine struct {
 	done       int
 	total      int
 	scannedAt  string
-	backupDir  string
 	lastError  string
 	accounts   []authStatus
 }
@@ -61,7 +58,7 @@ func (f *fixerEngine) snapshot() statusSnapshot {
 	defer f.mu.Unlock()
 	return statusSnapshot{
 		Busy: f.busy, Operation: f.operation, Done: f.done, Total: f.total,
-		ScannedAt: f.scannedAt, BackupDir: f.backupDir, LastError: f.lastError,
+		ScannedAt: f.scannedAt, LastError: f.lastError,
 		TargetURL: targetBaseURL, Accounts: append([]authStatus(nil), f.accounts...),
 	}
 }
@@ -130,14 +127,8 @@ func (f *fixerEngine) startFix(req fixRequest) error {
 }
 
 func (f *fixerEngine) runFix(targets []authStatus) {
-	backupDir := filepath.Join("data", pluginName, "backups", time.Now().Format("20060102-150405"))
-	_ = os.MkdirAll(backupDir, 0o700)
-	f.mu.Lock()
-	f.backupDir = backupDir
-	f.mu.Unlock()
-
 	for i, target := range targets {
-		err := repairAccount(target, backupDir)
+		err := repairAccount(target)
 		f.mu.Lock()
 		for n := range f.accounts {
 			if f.accounts[n].AuthIndex == target.AuthIndex {
@@ -151,6 +142,74 @@ func (f *fixerEngine) runFix(targets []authStatus) {
 					f.accounts[n].NeedsFix = false
 					f.accounts[n].Error = ""
 					f.accounts[n].LastOperation = "fixed"
+				}
+				break
+			}
+		}
+		f.done = i + 1
+		f.mu.Unlock()
+	}
+	f.mu.Lock()
+	f.busy = false
+	f.operation = ""
+	f.scannedAt = time.Now().Format(time.RFC3339)
+	f.mu.Unlock()
+}
+
+func (f *fixerEngine) startRollback(req fixRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.busy {
+		return fmt.Errorf("another operation is already running")
+	}
+	selected := make(map[string]struct{}, len(req.AuthIndexes))
+	for _, value := range req.AuthIndexes {
+		if value = strings.TrimSpace(value); value != "" {
+			selected[value] = struct{}{}
+		}
+	}
+	var targets []authStatus
+	for _, account := range f.accounts {
+		if account.AuthIndex == "" {
+			continue
+		}
+		if len(selected) > 0 {
+			if _, ok := selected[account.AuthIndex]; !ok {
+				continue
+			}
+		}
+		targets = append(targets, account)
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("no xAI auth files selected")
+	}
+	f.busy, f.operation, f.done, f.total, f.lastError = true, "rollback", 0, len(targets), ""
+	go f.runRollback(targets)
+	return nil
+}
+
+type restoredFields struct {
+	BaseURL     string
+	UsingAPI    bool
+	HasUsingAPI bool
+}
+
+func (f *fixerEngine) runRollback(targets []authStatus) {
+	for i, target := range targets {
+		restored, err := rollbackAccount(target)
+		f.mu.Lock()
+		for n := range f.accounts {
+			if f.accounts[n].AuthIndex == target.AuthIndex {
+				if err != nil {
+					f.accounts[n].Error = err.Error()
+					f.accounts[n].LastOperation = "rollback_failed"
+				} else {
+					f.accounts[n].BaseURL = restored.BaseURL
+					f.accounts[n].UsingAPI = restored.UsingAPI
+					f.accounts[n].HasUsingAPI = restored.HasUsingAPI
+					f.accounts[n].NeedsFix = restored.BaseURL != targetBaseURL || !restored.HasUsingAPI || !restored.UsingAPI
+					f.accounts[n].Error = ""
+					f.accounts[n].LastOperation = "rolled_back"
 				}
 				break
 			}
@@ -216,7 +275,7 @@ func inspectAuth(file authFileEntry) authStatus {
 	return status
 }
 
-func repairAccount(target authStatus, backupDir string) error {
+func repairAccount(target authStatus) error {
 	resp, data, err := getAuth(target.AuthIndex)
 	if err != nil {
 		return err
@@ -228,13 +287,6 @@ func repairAccount(target authStatus, backupDir string) error {
 	if name == "." || !strings.HasSuffix(strings.ToLower(name), ".json") {
 		return fmt.Errorf("invalid auth file name")
 	}
-	original, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode backup: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(backupDir, name), append(original, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write backup: %w", err)
-	}
 	data["base_url"] = targetBaseURL
 	data["using_api"] = true
 	updated, err := json.MarshalIndent(data, "", "  ")
@@ -245,6 +297,30 @@ func repairAccount(target authStatus, backupDir string) error {
 		return fmt.Errorf("save repaired auth: %w", err)
 	}
 	return nil
+}
+
+func rollbackAccount(target authStatus) (restoredFields, error) {
+	resp, data, err := getAuth(target.AuthIndex)
+	if err != nil {
+		return restoredFields{}, err
+	}
+	if strings.ToLower(strings.TrimSpace(asString(data["type"]))) != "xai" {
+		return restoredFields{}, fmt.Errorf("refusing to modify non-xai credential")
+	}
+	name := filepath.Base(firstNonEmpty(resp.Name, target.Name))
+	if name == "." || !strings.HasSuffix(strings.ToLower(name), ".json") {
+		return restoredFields{}, fmt.Errorf("invalid auth file name")
+	}
+	data["base_url"] = "https://cli-chat-proxy.grok.com/v1"
+	delete(data, "using_api")
+	updated, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return restoredFields{}, fmt.Errorf("encode rolled back auth: %w", err)
+	}
+	if _, err := callHost(methodHostAuthSave, authSaveRequest{Name: name, JSON: append(updated, '\n')}); err != nil {
+		return restoredFields{}, fmt.Errorf("save rolled back auth: %w", err)
+	}
+	return restoredFields{BaseURL: "https://cli-chat-proxy.grok.com/v1"}, nil
 }
 
 func getAuth(authIndex string) (authGetResponse, map[string]any, error) {

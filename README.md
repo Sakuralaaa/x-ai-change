@@ -9,13 +9,7 @@ CLIProxyAPI native plugin for the xAI authentication change announced on July 16
 }
 ```
 
-Before each write, the complete original JSON is copied to:
-
-```text
-data/xai-403-fixer/backups/<timestamp>/
-```
-
-Backups contain credentials and must be protected like the original auth directory.
+The management page can also restore the legacy configuration without a backup by setting `base_url` back to `https://cli-chat-proxy.grok.com/v1` and removing the `using_api` field.
 
 ## Publish once
 
